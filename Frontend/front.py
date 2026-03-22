@@ -1,0 +1,1110 @@
+import sys
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QLabel, QComboBox,
+                             QSlider, QSpinBox, QTabWidget, QGroupBox, QFileDialog,
+                             QScrollArea, QSplitter, QFrame, QSizePolicy, QMessageBox)
+from PyQt6.QtCore import Qt, QSize, QTimer, QEvent, pyqtSignal
+from PyQt6.QtGui import QAction, QIcon, QFont, QColor, QPalette, QPixmap, QImage, QShortcut, QKeySequence
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import numpy as np
+import cv2
+import os
+
+# Point Python to the build folder so it can recognize the 'backend' library
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../Backend/build")))
+
+import backend
+import task2_backend
+
+def numpy_to_qpixmap(img_array):
+    if img_array is None:
+        return QPixmap()
+    
+    # Needs to be a contiguous unmanaged array copied into Qt context to avoid GC crashes.
+    if len(img_array.shape) == 3:
+        h, w, c = img_array.shape
+        bytes_per_line = c * w
+        img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+        qimg = QImage(img_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg.copy())
+    else:
+        h, w = img_array.shape
+        bytes_per_line = w
+        img_gray = np.ascontiguousarray(img_array)
+        qimg = QImage(img_gray.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
+        return QPixmap.fromImage(qimg.copy())
+
+
+# ==========================================
+# --- CUSTOM WIDGETS ---
+# ==========================================
+
+class ImageLabel(QLabel):
+    """A custom QLabel that automatically scales its pixmap to fit its size while preserving aspect ratio."""
+
+    double_clicked = pyqtSignal()
+
+    def __init__(self, text=""):
+        super().__init__(text)
+        self.original_pixmap = None
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # --- THE FIX ---
+        # This stops the infinite growth loop by telling the layout to ignore the image's inherent size
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(100, 100)  # Prevents the label from completely collapsing
+
+    def set_image(self, file_path):
+        pixmap = QPixmap(file_path)
+        if not pixmap.isNull():
+            self.original_pixmap = pixmap
+            self.update_image()
+        else:
+            self.setText("❌ Failed to load image.")
+            self.original_pixmap = None
+            
+    def set_pixmap_data(self, pixmap):
+        if not pixmap.isNull():
+            self.original_pixmap = pixmap
+            self.update_image()
+
+    def update_image(self):
+        if self.original_pixmap and not self.original_pixmap.isNull():
+            # Scale the image to fit the label's current boundaries
+            scaled_pixmap = self.original_pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            super().setPixmap(scaled_pixmap)
+
+    def resizeEvent(self, event):
+        """Re-scale the image whenever the window or splitter is resized."""
+        if self.original_pixmap:
+            self.update_image()
+        super().resizeEvent(event)
+        
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+# ==========================================
+# --- STYLING CONSTANTS ---
+# ==========================================
+
+class AppStyle:
+    # --- DARK THEME PALETTE ---
+    DARK_STYLE = """
+        QMainWindow { background-color: #1e1e1e; }
+        QWidget { color: #e0e0e0; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+
+        /* Tabs */
+        QTabWidget::pane { border: 1px solid #3d3d3d; background: #252526; border-radius: 5px; }
+        QTabBar::tab { background: #2d2d2d; color: #aaa; padding: 10px 20px; border-top-left-radius: 5px; border-top-right-radius: 5px; }
+        QTabBar::tab:selected { background: #3e3e42; color: #fff; border-bottom: 2px solid #007acc; }
+
+        /* Groups / Cards */
+        QGroupBox { 
+            border: 1px solid #3e3e42; 
+            border-radius: 8px; 
+            margin-top: 20px; 
+            background-color: #252526; 
+            font-weight: bold;
+        }
+        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #007acc; }
+
+        /* Controls */
+        QPushButton { 
+            background-color: #007acc; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            padding: 8px 16px; 
+            font-weight: bold;
+        }
+        QPushButton:hover { background-color: #005f9e; }
+        QPushButton:pressed { background-color: #003e66; }
+        QPushButton#SecondaryBtn { background-color: #3e3e42; color: #eee; }
+        QPushButton#SecondaryBtn:hover { background-color: #4e4e52; }
+
+        QComboBox, QSpinBox { 
+            background-color: #333337; 
+            border: 1px solid #3e3e42; 
+            border-radius: 4px; 
+            padding: 5px; 
+            color: white; 
+        }
+
+        /* Image Display Area */
+        QLabel#ImageDisplay { 
+            border: 2px dashed #3e3e42; 
+            background-color: #1e1e1e; 
+            color: #555;
+            font-size: 16px;
+        }
+
+        /* Plot Tab Buttons */
+        QPushButton#PlotTabBtn { 
+            background-color: #2d2d2d; 
+            color: #aaa; 
+            border: 1px solid #3e3e42;
+            border-bottom: none;
+            border-top-left-radius: 4px; 
+            border-top-right-radius: 4px; 
+            padding: 5px 15px; 
+        }
+        QPushButton#PlotTabBtn:hover { background-color: #3e3e42; }
+        QPushButton#PlotTabBtn:checked { 
+            background-color: #007acc; 
+            color: white; 
+            border-color: #007acc;
+        }
+    """
+
+
+# ==========================================
+# --- MAIN APPLICATION ---
+# ==========================================
+
+class ComputerVisionApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("CV Toolkit Pro")
+
+        # State mapping
+        self.current_image_np = None
+        self.hybrid_img_a_np = None
+        self.hybrid_img_b_np = None
+        self.undo_stack_np = []
+        self.redo_stack_np = []
+        
+        self.current_plot_mode = 'hist'
+
+        # UI Initialization
+        self.init_ui()
+        self.apply_theme()
+        
+        # Install event filter to prevent scroll wheel changing input values
+        self.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            # Ignore wheel events on these types unless they explicitly have focus
+            if isinstance(obj, (QComboBox, QSpinBox, QSlider)) and not obj.hasFocus():
+                event.ignore()
+                return True
+        return super().eventFilter(obj, event)
+
+    def init_ui(self):
+        # Keyboard Shortcuts
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo_action)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self.redo_action)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo_action)
+
+        # Main Layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+
+        # Top Bar for Global Buttons (like Download Result)
+        top_bar = QWidget()
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(10, 5, 10, 5)
+        
+        self.btn_download_main = QPushButton("💾 Download Result Image")
+        self.btn_download_main.setObjectName("SecondaryBtn")
+        self.btn_download_main.setMinimumHeight(35)
+        self.btn_download_main.clicked.connect(lambda: self.download_image(self.current_image_np, "Result"))
+        self.btn_download_main.setVisible(False)  # Hidden until we have an image
+        
+        top_bar_layout.addStretch()
+        top_bar_layout.addWidget(self.btn_download_main)
+        
+        main_layout.addWidget(top_bar)
+
+        # Tabs
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        self.init_main_tab()
+        self.init_hybrid_tab()
+        self.init_task2_tab()
+        
+        # Hide the global download button/topbar if not on the Image Processor tab
+        self.tabs.currentChanged.connect(lambda index: top_bar.setVisible(index == 0))
+
+    def init_main_tab(self):
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+
+        # Splitter to allow resizing between Controls and View
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # --- LEFT: SCROLLABLE CONTROLS ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
+        controls_layout.setSpacing(20)
+
+        # 1. File Operations
+        file_group = self.create_group_box("File & History")
+        l = QVBoxLayout()
+        btn_load = QPushButton("📂 Load Image")
+        # Connect to handle_image_upload passing the target label
+        btn_load.clicked.connect(lambda: self.handle_image_upload(self.lbl_orig))
+        
+        hist_layout = QHBoxLayout()
+        btn_undo = QPushButton("↩ Undo Last Action")
+        btn_undo.setObjectName("SecondaryBtn")
+        btn_undo.clicked.connect(self.undo_action)
+        
+        btn_redo = QPushButton("↪ Redo Last Action")
+        btn_redo.setObjectName("SecondaryBtn")
+        btn_redo.clicked.connect(self.redo_action)
+
+        hist_layout.addWidget(btn_undo)
+        hist_layout.addWidget(btn_redo)
+        
+        l.addWidget(btn_load)
+        l.addLayout(hist_layout)
+        file_group.setLayout(l)
+        controls_layout.addWidget(file_group)
+
+        # 2. Noise (Task 1: Additive Noise)
+        noise_group = self.create_group_box("Add Noise")
+        l = QVBoxLayout()
+        self.combo_noise = QComboBox()
+        self.combo_noise.addItems(["Uniform Noise", "Gaussian Noise", "Salt & Pepper"])
+        self.combo_noise.installEventFilter(self)
+        self.combo_noise.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+        noise_intensity_layout, self.slider_noise, self.lbl_noise_intensity_val = self.create_slider_widget(
+            "Intensity:", 1, 100, 10
+        )
+
+        btn_noise = QPushButton("Apply Noise")
+        btn_noise.clicked.connect(self.apply_noise)
+        l.addWidget(QLabel("Type:"))
+        l.addWidget(self.combo_noise)
+        l.addLayout(noise_intensity_layout)
+        l.addWidget(self.slider_noise)
+        l.addWidget(btn_noise)
+        noise_group.setLayout(l)
+        controls_layout.addWidget(noise_group)
+
+        # 3. Spatial Filters (Task 2: LPF)
+        filter_group = self.create_group_box("Spatial Filters (Smoothing)")
+        l = QVBoxLayout()
+        self.combo_filter = QComboBox()
+        self.combo_filter.addItems(["Average Filter", "Gaussian Filter", "Median Filter"])
+        self.combo_filter.installEventFilter(self)
+        self.combo_filter.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        kernel_layout, self.slider_kernel, self.lbl_kernel_val = self.create_slider_widget(
+            "Kernel Size:", 0, 14, 0, step=1, value_formatter=lambda v: str(v * 2 + 3)
+        )
+
+        btn_filter = QPushButton("Apply Filter")
+        btn_filter.clicked.connect(self.apply_filter)
+        l.addWidget(QLabel("Filter Type:"))
+        l.addWidget(self.combo_filter)
+        l.addLayout(kernel_layout)
+        l.addWidget(self.slider_kernel)
+        l.addWidget(btn_filter)
+        filter_group.setLayout(l)
+        controls_layout.addWidget(filter_group)
+
+        # 4. Edge Detection (Task 3: Edges)
+        edge_group = self.create_group_box("Edge Detection")
+        l = QVBoxLayout()
+        self.combo_edge = QComboBox()
+        self.combo_edge.addItems(["Sobel", "Roberts", "Prewitt", "Canny"])
+        self.combo_edge.installEventFilter(self)
+        self.combo_edge.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self.canny_controls_widget = QWidget()
+        canny_layout = QVBoxLayout(self.canny_controls_widget)
+        canny_layout.setContentsMargins(0, 0, 0, 0)
+        
+        t1_layout, self.slider_canny_t1, self.lbl_canny_t1_val = self.create_slider_widget(
+            "Threshold 1:", 0, 500, 100
+        )
+        
+        t2_layout, self.slider_canny_t2, self.lbl_canny_t2_val = self.create_slider_widget(
+            "Threshold 2:", 0, 500, 200
+        )
+        
+        canny_layout.addLayout(t1_layout)
+        canny_layout.addWidget(self.slider_canny_t1)
+        canny_layout.addLayout(t2_layout)
+        canny_layout.addWidget(self.slider_canny_t2)
+        
+        self.canny_controls_widget.setVisible(False)
+        
+        self.sobel_controls_widget = QWidget()
+        sobel_layout = QVBoxLayout(self.sobel_controls_widget)
+        sobel_layout.setContentsMargins(0, 0, 0, 0)
+        
+        ksize_layout, self.slider_sobel_ksize, self.lbl_sobel_ksize_val = self.create_slider_widget(
+            "Kernel Size:", 0, 3, 1, step=1, value_formatter=lambda v: f"{v * 2 + 1}"
+        )
+        sobel_layout.addLayout(ksize_layout)
+        sobel_layout.addWidget(self.slider_sobel_ksize)
+        self.sobel_controls_widget.setVisible(True)
+
+        self.combo_edge.currentTextChanged.connect(self.toggle_edge_sliders)
+
+        btn_edge = QPushButton("Detect Edges")
+        btn_edge.clicked.connect(self.apply_edge)
+        l.addWidget(QLabel("Method:"))
+        l.addWidget(self.combo_edge)
+        l.addWidget(self.canny_controls_widget)
+        l.addWidget(self.sobel_controls_widget)
+        l.addWidget(btn_edge)
+        edge_group.setLayout(l)
+        controls_layout.addWidget(edge_group)
+
+        # 5. Frequency Domain
+        freq_group = self.create_group_box("Frequency Domain")
+        l = QVBoxLayout()
+        self.combo_freq = QComboBox()
+        self.combo_freq.addItems(["Low Pass (Blur)", "High Pass (Sharpen)"])
+        self.combo_freq.installEventFilter(self)
+        self.combo_freq.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+        freq_radius_layout, self.slider_freq_radius, self.lbl_freq_radius_val = self.create_slider_widget(
+            "Cutoff Radius:", 10, 200, 30
+        )
+
+        btn_freq = QPushButton("Apply FFT Filter")
+        btn_freq.clicked.connect(self.apply_freq)
+        l.addWidget(self.combo_freq)
+        l.addLayout(freq_radius_layout)
+        l.addWidget(self.slider_freq_radius)
+        l.addWidget(btn_freq)
+        freq_group.setLayout(l)
+        controls_layout.addWidget(freq_group)
+
+        # 6. Global Ops
+        ops_group = self.create_group_box("Enhancement")
+        l = QVBoxLayout()
+        self.btn_grayscale = QPushButton("Convert to Grayscale")
+        self.btn_grayscale.clicked.connect(self.apply_grayscale)
+        self.btn_equalize = QPushButton("Equalize Histogram")
+        self.btn_equalize.clicked.connect(self.apply_equalize)
+        self.btn_normalize = QPushButton("Normalize Image")
+        self.btn_normalize.clicked.connect(self.apply_normalize)
+        l.addWidget(self.btn_grayscale)
+        l.addWidget(self.btn_equalize)
+        l.addWidget(self.btn_normalize)
+        ops_group.setLayout(l)
+        controls_layout.addWidget(ops_group)
+
+        controls_layout.addStretch()
+        scroll_area.setWidget(controls_widget)
+
+        # --- RIGHT: DISPLAY AREA ---
+        display_widget = QWidget()
+        display_layout = QVBoxLayout(display_widget)
+
+        # Image Viewports
+        img_container = QWidget()
+        img_layout = QHBoxLayout(img_container)
+
+        # Use Custom ImageLabel
+        self.lbl_orig = ImageLabel("Original\n(Drop or Double-Click Here)")
+        self.lbl_orig.setObjectName("ImageDisplay")
+        self.lbl_orig.double_clicked.connect(lambda: self.handle_image_upload(self.lbl_orig))
+
+        self.lbl_proc = ImageLabel("Processed\nResult")
+        self.lbl_proc.setObjectName("ImageDisplay")
+        
+        img_layout.addWidget(self.lbl_orig, stretch=1)
+        img_layout.addWidget(self.lbl_proc, stretch=1)
+
+        # Histogram Area container
+        hist_area_widget = QWidget()
+        hist_area_layout = QVBoxLayout(hist_area_widget)
+        hist_area_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Toggle buttons for Hist/CDF
+        plot_tabs_layout = QHBoxLayout()
+        plot_tabs_layout.setSpacing(0)
+        
+        self.btn_show_hist = QPushButton("Histogram")
+        self.btn_show_hist.setObjectName("PlotTabBtn")
+        self.btn_show_hist.setCheckable(True)
+        self.btn_show_hist.setChecked(True)
+        self.btn_show_hist.clicked.connect(lambda: self.set_plot_mode('hist'))
+        
+        self.btn_show_cdf = QPushButton("CDF")
+        self.btn_show_cdf.setObjectName("PlotTabBtn")
+        self.btn_show_cdf.setCheckable(True)
+        self.btn_show_cdf.clicked.connect(lambda: self.set_plot_mode('cdf'))
+        
+        plot_tabs_layout.addWidget(self.btn_show_hist)
+        plot_tabs_layout.addWidget(self.btn_show_cdf)
+        plot_tabs_layout.addStretch()
+
+        # Canvas
+        self.figure = Figure(figsize=(5, 3), dpi=100)
+        self.canvas = FigureCanvas(self.figure)
+        self.canvas.setMinimumHeight(250)
+
+        hist_area_layout.addLayout(plot_tabs_layout)
+        hist_area_layout.addWidget(self.canvas)
+
+        display_layout.addWidget(img_container, stretch=2)
+        display_layout.addWidget(hist_area_widget, stretch=1)
+
+        # Add to Splitter
+        splitter.addWidget(scroll_area)
+        splitter.addWidget(display_widget)
+        splitter.setSizes([300, 900])
+
+        layout.addWidget(splitter)
+        self.tabs.addTab(tab, "Image Processor")
+
+    def init_hybrid_tab(self):
+        #  Task 10 - Hybrid Images
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+
+        # Controls Side
+        controls = QWidget()
+        controls.setFixedWidth(300)
+        c_layout = QVBoxLayout(controls)
+
+        grp_a = self.create_group_box("Image A (Low Pass)")
+        l_a = QVBoxLayout()
+        btn_load_a = QPushButton("Load Image A")
+        btn_load_a.clicked.connect(lambda: self.handle_image_upload(self.lbl_hybrid_a))
+        l_a.addWidget(btn_load_a)
+        
+        cutoff_a_layout, self.slider_cutoff_a, self.lbl_cutoff_a_val = self.create_slider_widget(
+            "Cutoff Radius:", 10, 200, 30
+        )
+
+        l_a.addLayout(cutoff_a_layout)
+        l_a.addWidget(self.slider_cutoff_a)
+        grp_a.setLayout(l_a)
+
+        grp_b = self.create_group_box("Image B (High Pass)")
+        l_b = QVBoxLayout()
+        btn_load_b = QPushButton("Load Image B")
+        btn_load_b.clicked.connect(lambda: self.handle_image_upload(self.lbl_hybrid_b))
+        l_b.addWidget(btn_load_b)
+        
+        cutoff_b_layout, self.slider_cutoff_b, self.lbl_cutoff_b_val = self.create_slider_widget(
+            "Cutoff Radius:", 10, 200, 30
+        )
+
+        l_b.addLayout(cutoff_b_layout)
+        l_b.addWidget(self.slider_cutoff_b)
+        grp_b.setLayout(l_b)
+
+        btn_mix = QPushButton("✨ Make Hybrid")
+        btn_mix.setMinimumHeight(50)
+        btn_mix.clicked.connect(self.apply_hybrid)
+
+        c_layout.addWidget(grp_a)
+        c_layout.addWidget(grp_b)
+        c_layout.addWidget(btn_mix)
+        c_layout.addStretch()
+
+        # Display Side
+        display = QWidget()
+        d_layout = QVBoxLayout(display)
+
+        # Top: Inputs using Custom ImageLabel
+        top_row = QHBoxLayout()
+        
+        # We need a dedicated np array state for the intermediate filtered images to download
+        self.hybrid_img_a_filtered_np = None
+        self.hybrid_img_b_filtered_np = None
+
+        container_a, self.lbl_hybrid_a, _ = self.create_hybrid_image_panel(
+            "Img A (Low Pass)\n(Double-Click to Load)", "💾 Download A",
+            lambda lbl: self.handle_image_upload(lbl),
+            lambda: self.download_image(self.hybrid_img_a_filtered_np if self.hybrid_img_a_filtered_np is not None else self.hybrid_img_a_np, "Image A")
+        )
+
+        container_b, self.lbl_hybrid_b, _ = self.create_hybrid_image_panel(
+            "Img B (High Pass)\n(Double-Click to Load)", "💾 Download B",
+            lambda lbl: self.handle_image_upload(lbl),
+            lambda: self.download_image(self.hybrid_img_b_filtered_np if self.hybrid_img_b_filtered_np is not None else self.hybrid_img_b_np, "Image B")
+        )
+
+        top_row.addWidget(container_a)
+        top_row.addWidget(container_b)
+
+        # Bottom: Result using Custom ImageLabel
+        container_res = QWidget()
+        layout_res = QVBoxLayout(container_res)
+        layout_res.setContentsMargins(0, 0, 0, 0)
+        
+        self.lbl_hybrid_res = ImageLabel("Hybrid Result")
+        self.lbl_hybrid_res.setObjectName("ImageDisplay")
+        self.lbl_hybrid_res.setStyleSheet("border: 2px solid #007acc;")
+        
+        # State for the final result
+        self.hybrid_res_np = None
+        btn_download_res = QPushButton("💾 Download Hybrid")
+        btn_download_res.setObjectName("SecondaryBtn")
+        btn_download_res.clicked.connect(lambda: self.download_image(self.hybrid_res_np, "Hybrid Result"))
+        layout_res.addWidget(self.lbl_hybrid_res)
+        layout_res.addWidget(btn_download_res)
+
+        # --- THE FIX: Equal Stretch Factors ---
+        # By giving both a stretch of 1, they perfectly split the vertical space 50/50
+        d_layout.addLayout(top_row, stretch=1)
+        d_layout.addWidget(container_res, stretch=1)
+
+        layout.addWidget(controls)
+        layout.addWidget(display)
+
+        self.tabs.addTab(tab, "Hybrid Lab")
+
+    def init_task2_tab(self):
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+
+        # Controls Side
+        controls = QWidget()
+        controls.setFixedWidth(350)
+        c_layout = QVBoxLayout(controls)
+        
+        # We need a state list to store paths for batch processing
+        self.task2_batch_files = []
+        self.task2_current_idx = -1
+
+        grp_load = self.create_group_box("Batch Loader (Task 2)")
+        l_load = QVBoxLayout()
+        btn_load_folder = QPushButton("📂 Select Multiple Images")
+        btn_load_folder.clicked.connect(self.load_batch_images)
+        self.lbl_batch_status = QLabel("0 images loaded")
+        
+        # Navigation
+        nav_layout = QHBoxLayout()
+        self.btn_prev_img = QPushButton("⬅ Prev")
+        self.btn_prev_img.setObjectName("SecondaryBtn")
+        self.btn_prev_img.clicked.connect(self.prev_batch_image)
+        self.btn_next_img = QPushButton("Next ➡")
+        self.btn_next_img.setObjectName("SecondaryBtn")
+        self.btn_next_img.clicked.connect(self.next_batch_image)
+        nav_layout.addWidget(self.btn_prev_img)
+        nav_layout.addWidget(self.btn_next_img)
+        
+        l_load.addWidget(btn_load_folder)
+        l_load.addWidget(self.lbl_batch_status)
+        l_load.addLayout(nav_layout)
+        grp_load.setLayout(l_load)
+        c_layout.addWidget(grp_load)
+
+        # To support stacked controls, let's add a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        controls_inner = QWidget()
+        l_opts = QVBoxLayout(controls_inner)
+        l_opts.setContentsMargins(0, 0, 0, 0)
+        
+        # Section 1: Canny Edge Detection
+        grp_canny = self.create_group_box("Section 1: Canny Edge Detection")
+        l_canny = QVBoxLayout(grp_canny)
+        
+        canny_t1_layout, self.spin_c_t1, _ = self.create_slider_widget("Threshold 1:", 0, 500, 50)
+        canny_t2_layout, self.spin_c_t2, _ = self.create_slider_widget("Threshold 2:", 0, 500, 150)
+        
+        btn_run_canny = QPushButton("Detect Edges")
+        btn_run_canny.clicked.connect(self.run_canny_only)
+        
+        l_canny.addLayout(canny_t1_layout)
+        l_canny.addWidget(self.spin_c_t1)
+        l_canny.addLayout(canny_t2_layout)
+        l_canny.addWidget(self.spin_c_t2)
+        l_canny.addWidget(btn_run_canny)
+        l_opts.addWidget(grp_canny)
+        
+        # Section 2: Line Detection
+        grp_lines = self.create_group_box("Section 2: Line Detection")
+        l_lines = QVBoxLayout(grp_lines)
+        
+        l_lines.addWidget(QLabel("Dynamically calculates voting thresholds based on image scale."))
+        
+        btn_run_lines = QPushButton("Detect Lines")
+        btn_run_lines.clicked.connect(self.run_lines_only)
+        
+        l_lines.addWidget(btn_run_lines)
+        l_opts.addWidget(grp_lines)
+        
+        # Section 3: Circle Detection
+        grp_circles = self.create_group_box("Section 3: Circle Detection")
+        l_circles = QVBoxLayout(grp_circles)
+        
+        l_circles.addWidget(QLabel("Dynamically calculates radius bounds and thresholds."))
+        
+        btn_run_circles = QPushButton("Detect Circles")
+        btn_run_circles.clicked.connect(self.run_circles_only)
+        
+        l_circles.addWidget(btn_run_circles)
+        l_opts.addWidget(grp_circles)
+        
+        # Section 4: Ellipse Detection
+        grp_ellipses = self.create_group_box("Section 4: Ellipse Detection")
+        l_ellipses = QVBoxLayout(grp_ellipses)
+        l_ellipses.addWidget(QLabel(
+            "Uses Xie & Ji 1D Accumulator algorithm.\n"
+            "Automatically infers parameters from edge pairs."
+        ))
+        
+        btn_run_ellipses = QPushButton("Detect Ellipses")
+        btn_run_ellipses.clicked.connect(self.run_ellipses_only)
+        l_ellipses.addWidget(btn_run_ellipses)
+        l_opts.addWidget(grp_ellipses)
+        
+        # --- FIX 1: Removed the duplicated block assigning scroll_area to c_layout ---
+        l_opts.addStretch()
+        scroll_area.setWidget(controls_inner)
+        c_layout.addWidget(scroll_area)
+        # -----------------------------------------------------------------------------
+
+        # Display Side
+        display = QWidget()
+        d_layout = QHBoxLayout(display)
+
+        self.lbl_t2_orig = ImageLabel("Original Image\n(Select Batch first)")
+        self.lbl_t2_orig.setObjectName("ImageDisplay")
+        
+        self.lbl_t2_res = ImageLabel("Detected Shapes (Task 2)")
+        self.lbl_t2_res.setObjectName("ImageDisplay")
+        self.lbl_t2_res.setStyleSheet("border: 2px solid #007acc;")
+
+        d_layout.addWidget(self.lbl_t2_orig, stretch=1)
+        d_layout.addWidget(self.lbl_t2_res, stretch=1)
+
+        layout.addWidget(controls)
+        layout.addWidget(display)
+
+        self.tabs.addTab(tab, "Task 2 / Shapes")
+
+    # ==========================================
+    # --- HELPER FUNCTIONS ---
+    # ==========================================
+
+    def create_slider_widget(self, label_text, min_val, max_val, default_val, step=1, value_formatter=str):
+        layout = QHBoxLayout()
+        layout.addWidget(QLabel(label_text))
+        lbl_val = QLabel(value_formatter(default_val))
+        layout.addWidget(lbl_val)
+        layout.addStretch()
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(min_val, max_val)
+        slider.setSingleStep(step)
+        slider.setValue(default_val)
+        slider.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        slider.installEventFilter(self)
+        
+        slider.valueChanged.connect(lambda val, l=lbl_val, f=value_formatter: l.setText(f(val)))
+        
+        return layout, slider, lbl_val
+
+    def create_hybrid_image_panel(self, placeholder_text, download_btn_text, upload_callback, download_callback):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        lbl = ImageLabel(placeholder_text)
+        lbl.setObjectName("ImageDisplay")
+        lbl.double_clicked.connect(lambda: upload_callback(lbl))
+        
+        btn_download = QPushButton(download_btn_text)
+        btn_download.setObjectName("SecondaryBtn")
+        btn_download.clicked.connect(download_callback)
+        
+        layout.addWidget(lbl)
+        layout.addWidget(btn_download)
+        
+        return container, lbl, btn_download
+
+    def load_batch_images(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select Images for Task 2", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if files:
+            self.task2_batch_files = files
+            self.task2_current_idx = 0
+            self.lbl_batch_status.setText(f"{len(files)} images loaded. Showing 1/{len(files)}")
+            self.display_current_batch_image()
+
+    def display_current_batch_image(self):
+        if 0 <= self.task2_current_idx < len(self.task2_batch_files):
+            file_path = self.task2_batch_files[self.task2_current_idx]
+            self.lbl_t2_orig.set_image(file_path)
+            self.lbl_t2_res.clear()
+            self.lbl_t2_res.setText("Press Process...")
+            self.lbl_batch_status.setText(f"Showing {self.task2_current_idx+1}/{len(self.task2_batch_files)}")
+
+    def next_batch_image(self):
+        if self.task2_batch_files and self.task2_current_idx < len(self.task2_batch_files) - 1:
+            self.task2_current_idx += 1
+            self.display_current_batch_image()
+
+    def prev_batch_image(self):
+        if self.task2_batch_files and self.task2_current_idx > 0:
+            self.task2_current_idx -= 1
+            self.display_current_batch_image()
+
+    def _get_current_t2_image(self):
+        if not self.task2_batch_files or self.task2_current_idx < 0:
+            return None
+        file_path = self.task2_batch_files[self.task2_current_idx]
+        img = cv2.imread(file_path)
+        
+        # --- FIX 2: Downscale large images to prevent massive lag / freezing ---
+        max_width = 800
+        if img is not None and img.shape[1] > max_width:
+            ratio = max_width / img.shape[1]
+            new_dim = (max_width, int(img.shape[0] * ratio))
+            img = cv2.resize(img, new_dim, interpolation=cv2.INTER_AREA)
+        # -----------------------------------------------------------------------
+        return img
+
+    def run_canny_only(self):
+        img_np = self._get_current_t2_image()
+        if img_np is None: return
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.lbl_t2_res.setText("⏳ Extracting Edges...\nPlease wait")
+        QApplication.processEvents()
+
+        try:
+            t1 = self.spin_c_t1.value()
+            t2 = self.spin_c_t2.value()
+            res_img = task2_backend.apply_custom_canny(img_np, t1, t2)
+            
+            # --- FIX 3: Convert directly to RGB (not BGR) for PyQt display consistency ---
+            dis_img = cv2.cvtColor(res_img, cv2.COLOR_GRAY2RGB)
+            self.lbl_t2_res.set_pixmap_data(numpy_to_qpixmap(dis_img))
+        except Exception as e:
+            self.lbl_t2_res.setText(f"❌ Error during edge detect:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def run_lines_only(self):
+        img_np = self._get_current_t2_image()
+        if img_np is None: return
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.lbl_t2_res.setText("⏳ Detecting Lines...\nPlease wait")
+        QApplication.processEvents()
+
+        try:
+            t1 = self.spin_c_t1.value()
+            t2 = self.spin_c_t2.value()
+            edges = task2_backend.apply_custom_canny(img_np, t1, t2)
+            
+            res_img = task2_backend.detect_lines(edges, img_np)
+            
+            # --- FIX 3: Convert C++ output (BGR) to PyQt expected (RGB) ---
+            if len(res_img.shape) == 3:
+                res_img = cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB)
+                
+            self.lbl_t2_res.set_pixmap_data(numpy_to_qpixmap(res_img))
+        except Exception as e:
+            self.lbl_t2_res.setText(f"❌ Error during line detect:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def run_circles_only(self):
+        img_np = self._get_current_t2_image()
+        if img_np is None: return
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.lbl_t2_res.setText("⏳ Detecting Circles...\nPlease wait")
+        QApplication.processEvents()
+
+        try:
+            t1 = self.spin_c_t1.value()
+            t2 = self.spin_c_t2.value()
+            edges = task2_backend.apply_custom_canny(img_np, t1, t2)
+            res_img = task2_backend.detect_circles(edges, img_np)
+            
+            # --- FIX 3: Convert C++ output (BGR) to PyQt expected (RGB) ---
+            if len(res_img.shape) == 3:
+                res_img = cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB)
+                
+            self.lbl_t2_res.set_pixmap_data(numpy_to_qpixmap(res_img))
+        except Exception as e:
+            self.lbl_t2_res.setText(f"❌ Error during circle detect:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            
+    def run_ellipses_only(self):
+        img_np = self._get_current_t2_image()
+        if img_np is None: return
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.lbl_t2_res.setText("⏳ Detecting Ellipses\n(Xie & Ji Algorithm)...\nPlease wait")
+        QApplication.processEvents()
+
+        try:
+            t1 = self.spin_c_t1.value()
+            t2 = self.spin_c_t2.value()
+            edges = task2_backend.apply_custom_canny(img_np, t1, t2)
+            
+            res_img = task2_backend.detect_ellipses(edges, img_np)
+            
+            # --- FIX 3: Convert C++ output (BGR) to PyQt expected (RGB) ---
+            if len(res_img.shape) == 3:
+                res_img = cv2.cvtColor(res_img, cv2.COLOR_BGR2RGB)
+                
+            self.lbl_t2_res.set_pixmap_data(numpy_to_qpixmap(res_img))
+        except Exception as e:
+            self.lbl_t2_res.setText(f"❌ Error during ellipse detect:\n{e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+
+    def _execute_image_op(self, operation, *args, **kwargs):
+        if self.current_image_np is None:
+            return
+        res = operation(self.current_image_np, *args, **kwargs)
+        self.set_processed_image(res)
+
+    def toggle_edge_sliders(self, text):
+        if text == "Canny":
+            self.canny_controls_widget.setVisible(True)
+            self.sobel_controls_widget.setVisible(False)
+        elif text == "Sobel":
+            self.canny_controls_widget.setVisible(False)
+            self.sobel_controls_widget.setVisible(True)
+        else:
+            self.canny_controls_widget.setVisible(False)
+            self.sobel_controls_widget.setVisible(False)
+
+    def create_group_box(self, title):
+        group = QGroupBox(title)
+        return group
+
+    def apply_theme(self):
+        self.setStyleSheet(AppStyle.DARK_STYLE)
+        # Update Matplotlib colors for Dark Mode
+        self.figure.patch.set_facecolor('#1e1e1e')
+        self.figure.gca().set_facecolor('#252526')
+        self.figure.gca().tick_params(colors='white')
+        self.figure.gca().xaxis.label.set_color('white')
+        self.figure.gca().yaxis.label.set_color('white')
+        self.figure.gca().title.set_color('white')
+
+        self.canvas.draw()
+
+    def handle_image_upload(self, target_label):
+        """Opens a file dialog, shows a loading state, and loads the image into the target label."""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+
+        if file_path:
+            # Show the waiting cursor globally
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+            # Clear previous image and show loading text
+            target_label.clear()
+            target_label.original_pixmap = None
+            target_label.setText("⏳ Loading...\nPlease wait")
+
+            # Force the UI to process the text update immediately
+            QApplication.processEvents()
+
+            # Simulate a brief delay to show the loader, then load the image
+            QTimer.singleShot(600, lambda: self.finalize_image_load(target_label, file_path))
+
+    def finalize_image_load(self, target_label, file_path):
+        """Sets the image on the label and removes the loading cursor."""
+        target_label.set_image(file_path)
+        QApplication.restoreOverrideCursor()
+        
+        # Load backing numpy array using OpenCV
+        img_np = cv2.imread(file_path)
+        if img_np is None:
+            return
+            
+        if target_label == self.lbl_orig:
+            self.current_image_np = img_np
+            # Clear undo stack on new image load
+            self.undo_stack_np.clear()
+            self.redo_stack_np.clear()
+            self.update_histograms()
+            self.lbl_proc.clear()
+            self.lbl_proc.setText("Processed\nResult")
+            self.btn_download_main.setVisible(True)
+        elif target_label == self.lbl_hybrid_a:
+            self.hybrid_img_a_np = img_np
+            # Show immediate feedback
+            radius_a = self.slider_cutoff_a.value()
+            self.hybrid_img_a_filtered_np = backend.apply_fft(self.hybrid_img_a_np, "low_pass", radius_a)
+            qpixmap_a = numpy_to_qpixmap(self.hybrid_img_a_filtered_np)
+            self.lbl_hybrid_a.set_pixmap_data(qpixmap_a)
+        elif target_label == self.lbl_hybrid_b:
+            self.hybrid_img_b_np = img_np
+            # Show immediate feedback
+            radius_b = self.slider_cutoff_b.value()
+            self.hybrid_img_b_filtered_np = backend.apply_fft(self.hybrid_img_b_np, "high_pass", radius_b)
+            qpixmap_b = numpy_to_qpixmap(self.hybrid_img_b_filtered_np)
+            self.lbl_hybrid_b.set_pixmap_data(qpixmap_b)
+
+    def set_processed_image(self, result_np):
+        """Helper to save history and display result on the screen."""
+        if self.current_image_np is not None:
+            self.undo_stack_np.append(self.current_image_np.copy())
+            self.redo_stack_np.clear()
+            
+        self.current_image_np = result_np
+        
+        # Update display
+        qpixmap = numpy_to_qpixmap(result_np)
+        self.lbl_proc.set_pixmap_data(qpixmap)
+        
+        self.update_histograms()
+        
+    def undo_action(self):
+        if self.undo_stack_np:
+            if self.current_image_np is not None:
+                self.redo_stack_np.append(self.current_image_np.copy())
+            self.current_image_np = self.undo_stack_np.pop()
+            
+            # Show on processed label (even if it's the original, just for visual feedback)
+            qpixmap = numpy_to_qpixmap(self.current_image_np)
+            self.lbl_proc.set_pixmap_data(qpixmap)
+            self.update_histograms()
+
+    def redo_action(self):
+        if self.redo_stack_np:
+            if self.current_image_np is not None:
+                self.undo_stack_np.append(self.current_image_np.copy())
+            self.current_image_np = self.redo_stack_np.pop()
+
+            qpixmap = numpy_to_qpixmap(self.current_image_np)
+            self.lbl_proc.set_pixmap_data(qpixmap)
+            self.update_histograms()
+
+    def set_plot_mode(self, mode):
+        self.current_plot_mode = mode
+        if mode == 'hist':
+            self.btn_show_hist.setChecked(True)
+            self.btn_show_cdf.setChecked(False)
+        else:
+            self.btn_show_hist.setChecked(False)
+            self.btn_show_cdf.setChecked(True)
+        self.update_histograms()
+
+    def update_histograms(self):
+        if self.current_image_np is None:
+            return
+            
+        # Draw on canvas
+        self.figure.clear()
+        
+        ax = self.figure.add_subplot(111)
+        
+        is_color = len(self.current_image_np.shape) == 3
+        colors = ('r', 'g', 'b') if is_color else ('gray',)
+        
+        if self.current_plot_mode == 'hist':
+            hist_data = backend.calculate_histogram(self.current_image_np)
+            ax.set_title("Histogram")
+            ax.set_ylabel("Frequency")
+            for i, color in enumerate(colors):
+                ax.plot(hist_data[i] if is_color else hist_data[0], color=color, alpha=0.7)
+        else:
+            cdf_data = backend.calculate_cdf(self.current_image_np)
+            ax.set_title("Cumulative Distribution Function (CDF)")
+            ax.set_ylabel("CDF")
+            for i, color in enumerate(colors):
+                data = cdf_data[i] if is_color else cdf_data[0]
+                normalized_cdf = data / data[-1] if data[-1] > 0 else data
+                ax.plot(normalized_cdf, color=color, linestyle='--')
+        
+        ax.set_xlabel("Pixel Intensity")
+            
+        # Refresh colors based on theme
+        ax.set_facecolor('#252526')
+        ax.tick_params(colors='white')
+        ax.xaxis.label.set_color('white')
+        ax.yaxis.label.set_color('white')
+        ax.title.set_color('white')
+        self.figure.patch.set_facecolor('#1e1e1e')
+        
+        self.canvas.draw()
+
+    def apply_noise(self):
+        noise_type = self.combo_noise.currentText()
+        intensity = self.slider_noise.value()
+        self._execute_image_op(backend.add_noise, noise_type, intensity)
+
+    def apply_filter(self):
+        filter_type = self.combo_filter.currentText()
+        kernel_size = self.slider_kernel.value() * 2 + 3
+        self._execute_image_op(backend.apply_filter, filter_type, kernel_size)
+
+    def apply_edge(self):
+        method = self.combo_edge.currentText()
+        if method == "Sobel":
+            ksize = self.slider_sobel_ksize.value() * 2 + 1
+            self._execute_image_op(backend.sobel, ksize)
+        elif method == "Roberts":
+            self._execute_image_op(backend.roberts)
+        elif method == "Prewitt":
+            self._execute_image_op(backend.prewitt)
+        else:
+            t1 = float(self.slider_canny_t1.value())
+            t2 = float(self.slider_canny_t2.value())
+            self._execute_image_op(backend.canny, t1, t2)
+
+    def apply_freq(self):
+        filter_type = "low_pass" if "Low" in self.combo_freq.currentText() else "high_pass"
+        radius = self.slider_freq_radius.value()
+        self._execute_image_op(backend.apply_fft, filter_type, radius)
+
+    def apply_grayscale(self):
+        self._execute_image_op(backend.to_grayscale)
+
+    def apply_equalize(self):
+        self._execute_image_op(backend.equalize)
+
+    def apply_normalize(self):
+        self._execute_image_op(backend.normalize)
+
+    def apply_hybrid(self):
+        if self.hybrid_img_a_np is None or self.hybrid_img_b_np is None:
+            return
+            
+        radius_a = self.slider_cutoff_a.value()
+        radius_b = self.slider_cutoff_b.value()
+        
+        res = backend.create_hybrid(self.hybrid_img_a_np, self.hybrid_img_b_np, radius_a, radius_b)
+        self.hybrid_res_np = res
+        qpixmap = numpy_to_qpixmap(res)
+        self.lbl_hybrid_res.set_pixmap_data(qpixmap)
+
+    def download_image(self, img_np, image_name):
+        """Helper to prompt for save location and save the current image."""
+        if img_np is None:
+            QMessageBox.warning(self, "No Image", f"Cannot download {image_name}. Please make sure an image is loaded and processed first.")
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(self, f"Save {image_name}", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            cv2.imwrite(file_path, img_np)
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")  # Fusion style allows for better custom coloring
+    window = ComputerVisionApp()
+    window.showMaximized()
+    sys.exit(app.exec())
+    

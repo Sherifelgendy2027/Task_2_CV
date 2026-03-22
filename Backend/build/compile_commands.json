@@ -1,0 +1,14 @@
+[
+{
+  "directory": "/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build",
+  "command": "/usr/bin/c++ -Dbackend_EXPORTS -isystem /opt/homebrew/Cellar/opencv/4.13.0_6/include/opencv4 -isystem /opt/homebrew/include -isystem /Library/Frameworks/Python.framework/Versions/3.14/include/python3.14  -arch arm64 -fPIC -fvisibility=hidden -flto -o CMakeFiles/backend.dir/main_binding.cpp.o -c /Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/main_binding.cpp",
+  "file": "/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/main_binding.cpp",
+  "output": "CMakeFiles/backend.dir/main_binding.cpp.o"
+},
+{
+  "directory": "/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build",
+  "command": "/usr/bin/c++ -Dtask2_backend_EXPORTS -isystem /opt/homebrew/Cellar/opencv/4.13.0_6/include/opencv4 -isystem /opt/homebrew/include -isystem /Library/Frameworks/Python.framework/Versions/3.14/include/python3.14  -arch arm64 -fPIC -fvisibility=hidden -flto -o CMakeFiles/task2_backend.dir/task2_shapes.cpp.o -c /Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/task2_shapes.cpp",
+  "file": "/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/task2_shapes.cpp",
+  "output": "CMakeFiles/task2_backend.dir/task2_shapes.cpp.o"
+}
+]

@@ -1,0 +1,4 @@
+/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build/CMakeFiles/backend.dir
+/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build/CMakeFiles/task2_backend.dir
+/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build/CMakeFiles/edit_cache.dir
+/Users/sherif_elgendy/Documents/SBME_Projects/CV_Task_2/image_filtering_and_edge_detection/Backend/build/CMakeFiles/rebuild_cache.dir
